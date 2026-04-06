@@ -140,7 +140,8 @@ class ExpertsInt8MoEMethod(FusedMoEMethodBase):
         x: torch.Tensor,
         topk_weights: torch.Tensor,
         topk_ids: torch.Tensor,
-    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
+        shared_experts_input: torch.Tensor | None,
+    ) -> torch.Tensor:
         from vllm.model_executor.layers.fused_moe import fused_experts
 
         return fused_experts(
