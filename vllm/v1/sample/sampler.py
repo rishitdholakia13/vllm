@@ -94,11 +94,7 @@ class Sampler(nn.Module):
             logits, sampling_metadata, predict_bonus_token
         )
         # Sample the next token.
-        sampled, processed_logprobs = self.sample(
-            logits,
-            sampling_metadata,
-            predict_bonus_token,
-        )
+        sampled, processed_logprobs = self.sample(logits, sampling_metadata)
         if processed_logprobs is not None:
             raw_logprobs = processed_logprobs
         # Convert sampled token ids to int64 (long) type to ensure compatibility
@@ -238,7 +234,6 @@ class Sampler(nn.Module):
         logits: torch.Tensor,
         sampling_metadata: SamplingMetadata,
         logprobs_mode_override: LogprobsMode | None = None,
-        predict_bonus_token: bool = False,
     ) -> tuple[torch.Tensor, torch.Tensor | None]:
         """Sample logits based on sampling metadata.
 
@@ -271,7 +266,7 @@ class Sampler(nn.Module):
         # Apply logits processors that only apply to random sampling
         # (argmax invariant)
         for processor in sampling_metadata.logitsprocs.argmax_invariant:
-            logits = processor.apply(logits, predict_bonus_token=predict_bonus_token)
+            logits = processor.apply(logits)
 
         # Apply top_k and/or top_p.
         random_sampled, processed_logprobs = self.topk_topp_sampler(
@@ -363,9 +358,15 @@ class Sampler(nn.Module):
         any_penalties_or_bad_words = (
             bool(bad_words_token_ids) or not sampling_metadata.no_penalties
         )
+        needs_thinking_combine = (
+            sampling_metadata.thinking_budget_state_holder is not None
+            and not sampling_metadata.no_thinking_budget
+        )
 
         output_token_ids = sampling_metadata.output_token_ids
-        if predict_bonus_token and any_penalties_or_bad_words:
+        if predict_bonus_token and (
+            any_penalties_or_bad_words or needs_thinking_combine
+        ):
             # Combine base outputs with spec tokens when speculative decoding
             # is enabled.
             output_token_ids = self._combine_outputs_with_spec_tokens(
@@ -383,10 +384,20 @@ class Sampler(nn.Module):
 
         # Apply logits processors which can impact greedy sampling.
         for processor in sampling_metadata.logitsprocs.non_argmax_invariant:
-            logits = processor.apply(logits, predict_bonus_token=predict_bonus_token)
+            logits = processor.apply(logits)
 
         # Apply penalties (e.g., freq_penalties).
         logits = self.apply_penalties(logits, sampling_metadata, output_token_ids)
+        holder = sampling_metadata.thinking_budget_state_holder
+        if holder is not None and not sampling_metadata.no_thinking_budget:
+            logits = holder.update_state_and_apply(
+                logits,
+                output_token_ids,
+                sampling_metadata.spec_token_ids,
+                predict_bonus_token=predict_bonus_token,
+                repeat_indices=None,
+            )
+
         return logits
 
     @staticmethod

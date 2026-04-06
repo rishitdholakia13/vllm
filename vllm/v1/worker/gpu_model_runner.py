@@ -162,6 +162,9 @@ from vllm.v1.sample.logits_processor.interface import LogitsProcessor
 from vllm.v1.sample.metadata import SamplingMetadata
 from vllm.v1.sample.rejection_sampler import RejectionSampler
 from vllm.v1.sample.sampler import Sampler
+from vllm.v1.sample.thinking_budget_state import (
+    maybe_create_thinking_budget_state_holder,
+)
 from vllm.v1.spec_decode.dflash import DFlashProposer
 from vllm.v1.spec_decode.draft_model import DraftModelProposer
 from vllm.v1.spec_decode.eagle import EagleProposer
@@ -613,6 +616,9 @@ class GPUModelRunner(
         )
         self._init_block_sizes = [placeholder_block_size]
         self._init_kernel_block_sizes = [placeholder_block_size]
+        self.thinking_budget_state_holder = maybe_create_thinking_budget_state_holder(
+            self.vllm_config, self.device, self.pin_memory
+        )
         self.input_batch = InputBatch(
             max_num_reqs=self.max_num_reqs,
             # We need to use the encoder length for encoder-decoder
@@ -640,6 +646,7 @@ class GPUModelRunner(
             or self.vllm_config.reasoning_config is not None,
             is_pooling_model=self.is_pooling_model,
             cp_kv_cache_interleave_size=self.parallel_config.cp_kv_cache_interleave_size,
+            thinking_budget_state_holder=self.thinking_budget_state_holder,
         )
 
         # Separate cuda stream for overlapping transfer of sampled token ids from
@@ -1352,19 +1359,6 @@ class GPUModelRunner(
         self.input_batch.condense()
         # Allow attention backend to reorder the batch, potentially
         self._may_reorder_batch(scheduler_output)
-
-        # Update output token ids with tokens sampled in last step
-        # if async scheduling and required by current sampling params.
-
-        # Update spec_token_ids with draft_tokens from the last step
-        # if async scheduling and in spec mode
-        # DO the update here, because it is needed for thinking budget
-        # in speculative decoding mode.
-        if self.use_async_scheduling:
-            if self._draft_token_req_ids is not None:
-                draft_token_ids_cpu, _ = self._get_draft_token_ids_cpu()
-                self.input_batch.update_async_spec_token_ids(draft_token_ids_cpu)
-            self.input_batch.update_async_output_token_ids()
         # Refresh batch metadata with any pending updates.
         self.input_batch.refresh_metadata()
 
@@ -3325,12 +3319,20 @@ class GPUModelRunner(
     ) -> SamplerOutput:
         # Sample the next token and get logprobs if needed.
         sampling_metadata = self.input_batch.sampling_metadata
-
+        # Update output token ids with tokens sampled in last step
+        # if async scheduling and required by current sampling params.
+        self.input_batch.update_async_output_token_ids()
         if spec_decode_metadata is None:
             return self.sampler(
                 logits=logits,
                 sampling_metadata=sampling_metadata,
             )
+
+        # Update spec_token_ids with real draft tokens from pre step only when
+        # output_token_ids is needed (penalties or bad_words are in use).
+        if self.use_async_scheduling and self._draft_token_req_ids is not None:
+            draft_token_ids_cpu, _ = self._get_draft_token_ids_cpu()
+            self.input_batch.update_async_spec_token_ids(draft_token_ids_cpu)
 
         sampler_output = self.rejection_sampler(
             spec_decode_metadata,
@@ -6533,6 +6535,7 @@ class GPUModelRunner(
                 logitsprocs=self.input_batch.logitsprocs,
                 logitsprocs_need_output_token_ids=self.input_batch.logitsprocs_need_output_token_ids,
                 is_pooling_model=self.is_pooling_model,
+                thinking_budget_state_holder=self.thinking_budget_state_holder,
             )
 
         assert self._init_block_sizes == block_sizes, (

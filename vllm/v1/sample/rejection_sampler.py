@@ -261,16 +261,26 @@ class RejectionSampler(nn.Module):
         any_penalties_or_bad_words = (
             sampling_metadata.bad_words_token_ids or has_penalties
         )
+        needs_thinking = (
+            sampling_metadata.thinking_budget_state_holder is not None
+            and not sampling_metadata.no_thinking_budget
+        )
 
         output_token_ids = sampling_metadata.output_token_ids
-        if any_penalties_or_bad_words:
+        if any_penalties_or_bad_words or needs_thinking:
             output_token_ids = self._combine_outputs_with_spec_tokens(
                 output_token_ids,
                 sampling_metadata.spec_token_ids,
             )
 
         # Calculate indices of target logits.
-        if sampling_metadata.allowed_token_ids_mask is not None or has_penalties:
+        repeat_indices: torch.Tensor | None = None
+        need_repeat_indices = (
+            sampling_metadata.allowed_token_ids_mask is not None
+            or has_penalties
+            or needs_thinking
+        )
+        if need_repeat_indices:
             num_requests = len(metadata.num_draft_tokens)
             num_draft_tokens = torch.tensor(metadata.num_draft_tokens, device="cpu")
             original_indices = torch.arange(num_requests, device="cpu")
@@ -287,9 +297,6 @@ class RejectionSampler(nn.Module):
                 token_mask = sampling_metadata.allowed_token_ids_mask[repeat_indices]
                 logits.masked_fill_(token_mask, float("-inf"))
 
-        for processor in sampling_metadata.logitsprocs.non_argmax_invariant:
-            logits = processor.apply(logits, predict_bonus_token=False)
-
         # Apply bad words exclusion.
         if bad_words_token_ids := sampling_metadata.bad_words_token_ids:
             apply_bad_words_with_drafts(
@@ -302,6 +309,15 @@ class RejectionSampler(nn.Module):
                     logits, metadata.num_draft_tokens
                 )
 
+        holder = sampling_metadata.thinking_budget_state_holder
+        if holder is not None and not sampling_metadata.no_thinking_budget:
+            logits = holder.update_state_and_apply(
+                logits,
+                output_token_ids,
+                sampling_metadata.spec_token_ids,
+                predict_bonus_token=False,
+                repeat_indices=repeat_indices,
+            )
         return logits
 
     @staticmethod

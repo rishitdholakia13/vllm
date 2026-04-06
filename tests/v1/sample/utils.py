@@ -213,7 +213,7 @@ def fake_apply_logitsprocs(
     """Imitate application of logits processors in engine core"""
     logits = test_fakes.logits[torch.tensor(slice_indices, dtype=torch.long)].clone()
     for processor in test_fakes.get_logitsprocs():
-        logits = processor.apply(logits, predict_bonus_token=False)
+        logits = processor.apply(logits)
     return logits
 
 

@@ -22,6 +22,7 @@ from vllm.v1.sample.logits_processor import (
     MoveDirectionality,
 )
 from vllm.v1.sample.metadata import SamplingMetadata
+from vllm.v1.sample.thinking_budget_state import ThinkingBudgetStateHolder
 from vllm.v1.utils import copy_slice
 from vllm.v1.worker.block_table import MultiGroupBlockTable
 
@@ -95,8 +96,11 @@ class InputBatch:
         is_spec_decode: bool = False,
         is_pooling_model: bool = False,
         cp_kv_cache_interleave_size: int = 1,
+        thinking_budget_state_holder: ThinkingBudgetStateHolder | None = None,
     ):
         self.is_pooling_model = is_pooling_model
+        self.thinking_budget_state_holder = thinking_budget_state_holder
+        self.thinking_token_budget_reqs: set[str] = set()
         self.is_spec_decode = is_spec_decode
         self.max_num_reqs = max_num_reqs
         self.max_model_len = max_model_len
@@ -430,9 +434,8 @@ class InputBatch:
                 self.bad_words_token_ids[req_index] = (
                     sampling_params.bad_words_token_ids
                 )
-            self.logits_processing_needs_token_ids[req_index] = (
-                sampling_params.requires_token_ids
-            )
+            if sampling_params.thinking_token_budget is not None:
+                self.thinking_token_budget_reqs.add(req_id)
         elif pooling_params := request.pooling_params:
             pooling_states = request.pooling_states
             assert pooling_states is not None
@@ -543,6 +546,7 @@ class InputBatch:
             # False means we don't fill with -inf.
             self.allowed_token_ids_mask_cpu_tensor[req_index].fill_(False)
         self.bad_words_token_ids.pop(req_index, None)
+        self.thinking_token_budget_reqs.discard(req_id)
         return req_index
 
     def swap_states(self, i1: int, i2: int) -> None:
@@ -656,14 +660,6 @@ class InputBatch:
                 self.allowed_token_ids_mask_cpu_tensor[i2],
                 self.allowed_token_ids_mask_cpu_tensor[i1],
             )
-
-        (
-            self.logits_processing_needs_token_ids[i1],
-            self.logits_processing_needs_token_ids[i2],
-        ) = (
-            self.logits_processing_needs_token_ids[i2],
-            self.logits_processing_needs_token_ids[i1],
-        )
 
     def _get_active_token_count(self, req_index: int) -> int:
         return int(self.num_tokens_no_spec[req_index]) + len(
@@ -790,9 +786,6 @@ class InputBatch:
             if bad_words_token_ids is not None:
                 self.bad_words_token_ids[empty_index] = bad_words_token_ids
 
-            self.logits_processing_needs_token_ids[empty_index] = (
-                self.logits_processing_needs_token_ids[last_req_index]
-            )
             # Decrement last_req_index since it is now empty.
             last_req_index -= 1
 
@@ -814,9 +807,10 @@ class InputBatch:
         # reset batch update tracking.
         # Update sampling metadata if batch state is changed.
         batch_update = self.batch_update_builder.get_and_reset(self.num_reqs)
-        # print(f"Batch update: {batch_update}")
+        if self.thinking_budget_state_holder is not None and batch_update:
+            self.thinking_budget_state_holder.sync_batch(batch_update)
         for logit_proc in self.logitsprocs.all:
-            logit_proc.update_state(batch_update, self.spec_token_ids)
+            logit_proc.update_state(batch_update)
         if batch_update:
             self.sampling_metadata = self._make_sampling_metadata()
 
@@ -872,7 +866,7 @@ class InputBatch:
             not self.no_penalties
             or bool(self.bad_words_token_ids)
             or self.logitsprocs_need_output_token_ids
-            or self.logits_processing_needs_token_ids[:num_reqs].any()
+            or self.no_thinking_budget
         )
         output_token_ids = (
             cast(list[list[int]], self.req_output_token_ids)
@@ -918,6 +912,8 @@ class InputBatch:
             allowed_token_ids_mask=allowed_token_ids_mask,
             bad_words_token_ids=self.bad_words_token_ids,
             logitsprocs=self.logitsprocs,
+            thinking_budget_state_holder=self.thinking_budget_state_holder,
+            no_thinking_budget=self.no_thinking_budget,
         )
 
     def get_pooling_params(self) -> list[PoolingParams]:
@@ -1054,12 +1050,7 @@ class InputBatch:
             return
 
         if (spec_token_ids := self.sampling_metadata.spec_token_ids) is not None:
-            for req_index, (req_id, spec_ids) in enumerate(
-                zip(
-                    self.req_ids,
-                    spec_token_ids,
-                )
-            ):
+            for req_id, spec_ids in zip(self.req_ids, spec_token_ids):
                 if spec_ids:
                     prev_index = self.prev_req_id_to_index.get(req_id)
                     if prev_index is not None:
@@ -1068,8 +1059,6 @@ class InputBatch:
                             del draft_ids[len(spec_ids) :]
                             spec_ids.clear()
                             spec_ids.extend(draft_ids)
-                            self.spec_token_ids[req_index].clear()
-                            self.spec_token_ids[req_index].extend(draft_ids)
 
     @property
     def num_reqs(self) -> int:
@@ -1097,6 +1086,13 @@ class InputBatch:
             len(self.presence_penalties_reqs) == 0
             and len(self.frequency_penalties_reqs) == 0
             and len(self.repetition_penalties_reqs) == 0
+        )
+
+    @property
+    def no_thinking_budget(self) -> bool:
+        return (
+            self.thinking_budget_state_holder is None
+            or len(self.thinking_token_budget_reqs) == 0
         )
 
     @property
