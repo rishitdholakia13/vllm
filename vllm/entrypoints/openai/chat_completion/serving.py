@@ -286,15 +286,6 @@ class OpenAIServingChat(OpenAIServing):
                     max_tokens,
                     self.default_sampling_params,
                 )
-                if self.reasoning_parser_cls is not None:
-                    tokenizer = self.renderer.get_tokenizer()
-                    self.reasoning_parser_cls(
-                        tokenizer
-                    ).adjust_structured_outputs_for_reasoning(
-                        sampling_params,
-                        request=request,
-                        model_architecture=self._model_architecture(),
-                    )
 
             self._log_inputs(
                 sub_request_id,

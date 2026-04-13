@@ -41,6 +41,7 @@ from openai_harmony import Message as OpenAIHarmonyMessage
 from pydantic import TypeAdapter
 
 from vllm import envs
+from vllm.config.utils import replace
 from vllm.engine.protocol import EngineClient
 from vllm.entrypoints.chat_utils import (
     ChatCompletionMessageParam,
@@ -116,7 +117,7 @@ from vllm.logprobs import SampleLogprobs
 from vllm.lora.request import LoRARequest
 from vllm.outputs import CompletionOutput
 from vllm.parser import ParserManager
-from vllm.sampling_params import SamplingParams
+from vllm.sampling_params import SamplingParams, StructuredOutputsParams
 from vllm.tokenizers import TokenizerLike
 from vllm.tool_parsers import ToolParser
 from vllm.utils import random_uuid
@@ -463,13 +464,20 @@ class OpenAIServingResponses(OpenAIServing):
                     context = SimpleContext()
 
             if self.parser and self.parser.reasoning_parser_cls is not None:
-                self.parser.reasoning_parser_cls(
-                    tokenizer
-                ).adjust_structured_outputs_for_reasoning(
-                    sampling_params,
-                    request=request,
-                    tool_server=self.tool_server,
-                )
+                reasoning_parser = self.parser.reasoning_parser_cls(tokenizer)
+                if (
+                    isinstance(
+                        struct_out := sampling_params.structured_outputs,
+                        StructuredOutputsParams,
+                    )
+                    and struct_out.all_non_structural_tag_constraints_none()
+                ):
+                    sampling_params.structured_outputs = replace(
+                        struct_out,
+                        structural_tag=reasoning_parser.prepare_structured_tag(
+                            struct_out.structural_tag, self.tool_server
+                        ),
+                    )
             generator = self._generate_with_builtin_tools(
                 request_id=request.request_id,
                 engine_input=engine_input,
