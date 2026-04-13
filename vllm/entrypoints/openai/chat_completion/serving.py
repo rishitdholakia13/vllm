@@ -7,7 +7,7 @@ import time
 from collections.abc import AsyncGenerator, AsyncIterator
 from collections.abc import Sequence as GenericSequence
 from http import HTTPStatus
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, cast
 
 import partial_json_parser
 import regex as re
@@ -232,7 +232,9 @@ class OpenAIServingChat(OpenAIServing):
             # skip_special_tokens for Gemma4) are visible to preprocessing.
             # preprocess_chat also calls adjust_request after tokenization; keep
             # adjust_request idempotent where possible.
-            request = reasoning_parser.adjust_request(request)
+            request = cast(
+                ChatCompletionRequest, reasoning_parser.adjust_request(request)
+            )
         result = await self.render_chat_request(request)
         if isinstance(result, ErrorResponse):
             return result
