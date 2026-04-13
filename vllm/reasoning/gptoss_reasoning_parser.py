@@ -11,13 +11,9 @@ from vllm.entrypoints.openai.engine.protocol import DeltaMessage
 from vllm.entrypoints.openai.parser.harmony_utils import parse_chat_output
 from vllm.logger import init_logger
 from vllm.reasoning import ReasoningParser
-from vllm.sampling_params import SamplingParams, StructuredOutputsParams
 
 if TYPE_CHECKING:
-    from vllm.entrypoints.openai.chat_completion.protocol import (
-        ChatCompletionRequest,
-        ChatCompletionToolsParam,
-    )
+    from vllm.entrypoints.openai.chat_completion.protocol import ChatCompletionRequest
     from vllm.entrypoints.openai.responses.protocol import ResponsesRequest
 
 logger = init_logger(__name__)
@@ -162,12 +158,7 @@ class GptOssReasoningParser(ReasoningParser):
 
     # This function prepares the structural tag to format reasoning output
     def prepare_structured_tag(
-        self,
-        original_tag: str | StructuredOutputsParams | None,
-        tool_server: ToolServer | None,
-        sampling_params: SamplingParams | None = None,
-        tools: list["ChatCompletionToolsParam"] | None = None,
-        model_architecture: str | None = None,
+        self, original_tag: str | None, tool_server: ToolServer | None
     ) -> str | None:
         if original_tag is None:
             if tool_server is None:
@@ -191,8 +182,6 @@ class GptOssReasoningParser(ReasoningParser):
                     func_tag = json.dumps(no_func_reasoning_tag)
 
                 return func_tag
-        elif isinstance(original_tag, str):
-            return original_tag
         else:
             # There is potential risk for appending the tag to the original tag
-            return None
+            return original_tag
