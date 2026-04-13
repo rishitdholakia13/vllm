@@ -362,16 +362,6 @@ class OpenAIServingChat(OpenAIServing):
             return self.response_role
         return request.messages[-1]["role"]
 
-    def _model_architecture(self) -> str | None:
-        """Return model architecture (e.g. for Cohere structural tag style lookup)."""
-        try:
-            architectures = getattr(self.model_config, "architectures", None)
-            if architectures and len(architectures) > 0:
-                return architectures[0]
-        except (IndexError, TypeError):
-            pass
-        return None
-
     @staticmethod
     def _bracket_level(s: str, opening="{", closing="}") -> int:
         """
