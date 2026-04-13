@@ -7,7 +7,7 @@ from abc import abstractmethod
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import replace
 from functools import cached_property
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from vllm.entrypoints.mcp.tool_server import ToolServer
 from vllm.entrypoints.openai.chat_completion.protocol import ChatCompletionRequest
@@ -18,11 +18,14 @@ from vllm.utils.collection_utils import is_list_of
 from vllm.utils.import_utils import import_from_path
 
 if TYPE_CHECKING:
+    from vllm.config import ModelConfig
     from vllm.entrypoints.openai.chat_completion.protocol import (
         ChatCompletionToolsParam,
     )
     from vllm.entrypoints.openai.engine.protocol import DeltaMessage
     from vllm.tokenizers import TokenizerLike
+else:
+    ModelConfig = Any
 
 logger = init_logger(__name__)
 
@@ -37,12 +40,30 @@ class ReasoningParser:
 
     def __init__(self, tokenizer: "TokenizerLike", *args, **kwargs):
         self.model_tokenizer = tokenizer
+        # Optional vLLM ModelConfig from the server. Use get (not pop) so composite
+        # parsers can forward **kwargs to nested parsers.
+        self._model_config: ModelConfig | None = kwargs.get("model_config")
 
     @cached_property
     def vocab(self) -> dict[str, int]:
         # NOTE: Only PreTrainedTokenizerFast is guaranteed to have .vocab
         # whereas all tokenizers have .get_vocab()
         return self.model_tokenizer.get_vocab()
+
+    @cached_property
+    def model_architecture(self) -> str | None:
+        """vLLM-resolved architecture string, or None if no config was injected."""
+        mc = self._model_config
+        if mc is None:
+            return None
+        resolved = getattr(mc, "architecture", None)
+        if resolved:
+            return resolved
+        archs = getattr(mc, "architectures", None) or []
+        if archs:
+            return archs[0]
+        hf = mc.hf_config
+        return getattr(hf, "model_type", None)
 
     @property
     def reasoning_start_str(self) -> str | None:
