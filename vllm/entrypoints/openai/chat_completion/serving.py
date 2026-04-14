@@ -7,7 +7,7 @@ import time
 from collections.abc import AsyncGenerator, AsyncIterator
 from collections.abc import Sequence as GenericSequence
 from http import HTTPStatus
-from typing import TYPE_CHECKING, Any, Final, cast
+from typing import TYPE_CHECKING, Any, Final
 
 import partial_json_parser
 import regex as re
@@ -226,14 +226,6 @@ class OpenAIServingChat(OpenAIServing):
             reasoning_parser = self.reasoning_parser_cls(
                 tokenizer,
                 chat_template_kwargs=chat_template_kwargs,  # type: ignore[call-arg]
-                model_config=self.model_config,  # type: ignore[call-arg]
-            )
-            # Before render so request fields (e.g. structured_outputs,
-            # skip_special_tokens for Gemma4) are visible to preprocessing.
-            # preprocess_chat also calls adjust_request after tokenization; keep
-            # adjust_request idempotent where possible.
-            request = cast(
-                ChatCompletionRequest, reasoning_parser.adjust_request(request)
             )
         result = await self.render_chat_request(request)
         if isinstance(result, ErrorResponse):
