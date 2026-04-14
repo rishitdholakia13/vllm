@@ -35,7 +35,7 @@ class ReasoningParser:
         self.model_tokenizer = tokenizer
         # Optional vLLM ModelConfig from the server. Use get (not pop) so composite
         # parsers can forward **kwargs to nested parsers.
-        self._model_config: ModelConfig | None = kwargs.get("model_config")
+        self._model_config: "ModelConfig" | None = kwargs.get("model_config")
 
     @cached_property
     def vocab(self) -> dict[str, int]:
