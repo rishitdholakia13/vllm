@@ -45,21 +45,6 @@ class ReasoningParser:
         # whereas all tokenizers have .get_vocab()
         return self.model_tokenizer.get_vocab()
 
-    @cached_property
-    def model_architecture(self) -> str | None:
-        """vLLM-resolved architecture string, or None if no config was injected."""
-        mc = self._model_config
-        if mc is None:
-            return None
-        resolved = getattr(mc, "architecture", None)
-        if resolved:
-            return resolved
-        archs = getattr(mc, "architectures", None) or []
-        if archs:
-            return archs[0]
-        hf = mc.hf_config
-        return getattr(hf, "model_type", None)
-
     @property
     def reasoning_start_str(self) -> str | None:
         """Set `reasoning_start_str` to the strings that delimit
