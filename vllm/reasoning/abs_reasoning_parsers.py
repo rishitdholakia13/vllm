@@ -19,8 +19,6 @@ if TYPE_CHECKING:
     from vllm.entrypoints.openai.engine.protocol import DeltaMessage
     from vllm.entrypoints.openai.responses.protocol import ResponsesRequest
     from vllm.tokenizers import TokenizerLike
-else:
-    ModelConfig = Any
 
 logger = init_logger(__name__)
 
