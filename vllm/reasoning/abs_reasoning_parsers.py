@@ -6,7 +6,7 @@ import os
 from abc import abstractmethod
 from collections.abc import Callable, Iterable, Sequence
 from functools import cached_property
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, cast
 
 from vllm.entrypoints.mcp.tool_server import ToolServer
 from vllm.logger import init_logger
@@ -35,7 +35,7 @@ class ReasoningParser:
         self.model_tokenizer = tokenizer
         # Optional vLLM ModelConfig from the server. Use get (not pop) so composite
         # parsers can forward **kwargs to nested parsers.
-        self._model_config: "ModelConfig" | None = kwargs.get("model_config")
+        self._model_config: ModelConfig | None = kwargs.get("model_config")
 
     @cached_property
     def vocab(self) -> dict[str, int]:
