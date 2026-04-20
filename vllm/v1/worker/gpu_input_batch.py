@@ -862,11 +862,15 @@ class InputBatch:
 
         # Only set output_token_ids if required by the current requests'
         # sampling parameters.
+        holder = self.thinking_budget_state_holder
+        thinking_budget_tracks_reqs = (
+            holder is not None and holder.has_tracked_requests()
+        )
         needs_output_token_ids = (
             not self.no_penalties
             or bool(self.bad_words_token_ids)
             or self.logitsprocs_need_output_token_ids
-            or self.no_thinking_budget
+            or not thinking_budget_tracks_reqs
         )
         output_token_ids = (
             cast(list[list[int]], self.req_output_token_ids)
@@ -913,7 +917,6 @@ class InputBatch:
             bad_words_token_ids=self.bad_words_token_ids,
             logitsprocs=self.logitsprocs,
             thinking_budget_state_holder=self.thinking_budget_state_holder,
-            no_thinking_budget=self.no_thinking_budget,
         )
 
     def get_pooling_params(self) -> list[PoolingParams]:

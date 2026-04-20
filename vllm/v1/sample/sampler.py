@@ -364,9 +364,9 @@ class Sampler(nn.Module):
         any_penalties_or_bad_words = (
             bool(bad_words_token_ids) or not sampling_metadata.no_penalties
         )
+        holder = sampling_metadata.thinking_budget_state_holder
         needs_thinking_combine = (
-            sampling_metadata.thinking_budget_state_holder is not None
-            and not sampling_metadata.no_thinking_budget
+            holder is not None and holder.has_tracked_requests()
         )
 
         output_token_ids = sampling_metadata.output_token_ids
@@ -394,8 +394,9 @@ class Sampler(nn.Module):
 
         # Apply penalties (e.g., freq_penalties).
         logits = self.apply_penalties(logits, sampling_metadata, output_token_ids)
-        holder = sampling_metadata.thinking_budget_state_holder
-        if holder is not None and not sampling_metadata.no_thinking_budget:
+        # print("output_token_ids: ", output_token_ids)
+        if holder is not None and holder.has_tracked_requests():
+            print("output_token_ids: ", output_token_ids)
             logits = holder.update_state_and_apply(
                 logits,
                 output_token_ids,

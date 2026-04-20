@@ -261,10 +261,8 @@ class RejectionSampler(nn.Module):
         any_penalties_or_bad_words = (
             sampling_metadata.bad_words_token_ids or has_penalties
         )
-        needs_thinking = (
-            sampling_metadata.thinking_budget_state_holder is not None
-            and not sampling_metadata.no_thinking_budget
-        )
+        holder = sampling_metadata.thinking_budget_state_holder
+        needs_thinking = holder is not None and holder.has_tracked_requests()
 
         output_token_ids = sampling_metadata.output_token_ids
         if any_penalties_or_bad_words or needs_thinking:
@@ -309,8 +307,7 @@ class RejectionSampler(nn.Module):
                     logits, metadata.num_draft_tokens
                 )
 
-        holder = sampling_metadata.thinking_budget_state_holder
-        if holder is not None and not sampling_metadata.no_thinking_budget:
+        if holder is not None and holder.has_tracked_requests():
             logits = holder.update_state_and_apply(
                 logits,
                 output_token_ids,

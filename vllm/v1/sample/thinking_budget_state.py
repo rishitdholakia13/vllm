@@ -21,7 +21,7 @@ def maybe_create_thinking_budget_state_holder(
     is_pin_memory: bool,
 ) -> "ThinkingBudgetStateHolder | None":
     rc = vllm_config.reasoning_config
-    if rc is None or not rc.is_thinking_enabled:
+    if rc is None or not rc.enabled:
         return None
     return ThinkingBudgetStateHolder(vllm_config, device, is_pin_memory)
 
@@ -41,14 +41,16 @@ class ThinkingBudgetStateHolder:
         else:
             self.num_spec_tokens = 0
 
-        self.is_enabled = (
-            reasoning_config is not None and reasoning_config.is_thinking_enabled
-        )
+        self.is_enabled = reasoning_config is not None and reasoning_config.enabled
 
-        self.think_start_token_ids = getattr(
-            reasoning_config, "think_start_token_ids", []
-        )
-        self.think_end_token_ids = getattr(reasoning_config, "think_end_token_ids", [])
+        if reasoning_config is None:
+            self.think_start_token_ids = []
+            self.think_end_token_ids = []
+        else:
+            rs = reasoning_config.reasoning_start_token_ids
+            re = reasoning_config.reasoning_end_token_ids
+            self.think_start_token_ids = rs if rs else []
+            self.think_end_token_ids = re if re else []
 
         self.device = device
         self._state: dict[int, dict[str, Any]] = {}
@@ -71,6 +73,15 @@ class ThinkingBudgetStateHolder:
             self.force_token_ids = torch.full(
                 (max_num_reqs,), -1, dtype=torch.long, device=device
             )
+
+    def has_tracked_requests(self) -> bool:
+        """True when ``sync_batch`` has state for at least one thinking_token_budget row.
+
+        Used to decide whether sampling needs output-token rows and spec combining;
+        distinct from merely having a holder instance (reasoning may be on with no
+        budgeted requests in this batch).
+        """
+        return bool(self._state)
 
     def sync_batch(self, batch_update: BatchUpdate | None) -> None:
         """Add/remove/move per-request state only (no _update_think_state)."""
@@ -114,6 +125,8 @@ class ThinkingBudgetStateHolder:
 
         spec_lists = spec_token_ids or []
         last_row_for_req: dict[int, int] | None = None
+        # print("output_token_ids: ", output_token_ids)
+        # print("length of output_token_ids: ", len(output_token_ids))
         if repeat_indices is not None:
             last_row_for_req = {}
             rpt = repeat_indices.cpu().tolist()
@@ -130,7 +143,6 @@ class ThinkingBudgetStateHolder:
                 continue
             else:
                 state["output_tok_ids"] = output_token_ids[seq_idx]
-
             if seq_idx < len(spec_lists):
                 state["spec_token_ids"] = list(spec_lists[seq_idx])
             else:
@@ -139,8 +151,11 @@ class ThinkingBudgetStateHolder:
             state["force_index"] = []
             out_tok_ids = state["output_tok_ids"]
             spec_n = len(state["spec_token_ids"])
-            if len(out_tok_ids) > 0 and len(out_tok_ids) > spec_n:
-                state["output_tok_ids"] = out_tok_ids[:-spec_n]
+            print("output_tok_ids in length: ", state["output_tok_ids"])
+            if len(state["output_tok_ids"]) > 0:
+                if len(state["output_tok_ids"]) > len(state["spec_token_ids"]) and len(state["spec_token_ids"]) > 0:
+                    state["output_tok_ids"] = state["output_tok_ids"][:-len(state["spec_token_ids"])]
+            print("output_tok_ids in length after: ", state["output_tok_ids"])
             self._update_think_state(state)
 
         return self._apply_forcing_to_logits(logits, predict_bonus_token, spec_lists)
@@ -214,11 +229,13 @@ class ThinkingBudgetStateHolder:
             state["force_index"] = []
             return
 
+
         if state["start_thinking"] == -1:
             start_thinking = self._find_last_sequence_index(
                 state.get("output_tok_ids", []), self.think_start_token_ids
             )
             state["start_thinking"] = start_thinking
+            print(f"start_thinking: {state['start_thinking']}")
 
         if state["end_thinking"] == -1:
             end_thinking = self._find_last_sequence_index(
@@ -233,6 +250,9 @@ class ThinkingBudgetStateHolder:
             sampled_tokens_from_previous_step = len(
                 state.get("output_tok_ids", [])
             ) - state.get("prev_output_length", 0)
+            print("output_tok_ids: ", state.get("output_tok_ids", []))
+            print("prev_output_length: ", state.get("prev_output_length", 0))
+            print(f"sampled_tokens_from_previous_step: {sampled_tokens_from_previous_step}")
         else:
             if state["prev_output_length"] == 0:
                 sampled_tokens_from_previous_step = len(
