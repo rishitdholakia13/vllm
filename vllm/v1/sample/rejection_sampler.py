@@ -308,13 +308,11 @@ class RejectionSampler(nn.Module):
                 )
 
         if holder is not None and holder.has_tracked_requests():
-            logits = holder.update_state_and_apply(
+            logits = holder.apply_to_logits(
                 logits,
-                output_token_ids,
-                sampling_metadata.spec_token_ids,
                 predict_bonus_token=False,
-                repeat_indices=repeat_indices,
-            )
+                spec_token_ids=sampling_metadata.spec_token_ids,
+            )   
         return logits
 
     @staticmethod

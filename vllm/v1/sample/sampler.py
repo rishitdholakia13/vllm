@@ -396,13 +396,15 @@ class Sampler(nn.Module):
         logits = self.apply_penalties(logits, sampling_metadata, output_token_ids)
         # print("output_token_ids: ", output_token_ids)
         if holder is not None and holder.has_tracked_requests():
-            print("output_token_ids: ", output_token_ids)
-            logits = holder.update_state_and_apply(
-                logits,
+            holder.update_state(
                 output_token_ids,
                 sampling_metadata.spec_token_ids,
-                predict_bonus_token=predict_bonus_token,
                 repeat_indices=None,
+            )
+            logits = holder.apply_to_logits(
+                logits,
+                predict_bonus_token,
+                sampling_metadata.spec_token_ids,
             )
 
         return logits

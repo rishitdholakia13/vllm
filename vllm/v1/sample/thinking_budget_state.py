@@ -111,22 +111,18 @@ class ThinkingBudgetStateHolder:
             else:
                 self._state[i2] = self._state.pop(i1, {})
 
-    def update_state_and_apply(
+    def update_state(
         self,
-        logits: torch.Tensor,
         output_token_ids: list[list[int]],
         spec_token_ids: list[list[int]] | None,
-        predict_bonus_token: bool,
         repeat_indices: torch.Tensor | None = None,
-    ) -> torch.Tensor:
-        """Refresh spec/output on each state row, update think state, force logits."""
+    ) -> None:
+        """Refresh per-request output/spec from sampling rows and recompute think state."""
         if not self.is_enabled or not self._state:
-            return logits
+            return
 
         spec_lists = spec_token_ids or []
         last_row_for_req: dict[int, int] | None = None
-        # print("output_token_ids: ", output_token_ids)
-        # print("length of output_token_ids: ", len(output_token_ids))
         if repeat_indices is not None:
             last_row_for_req = {}
             rpt = repeat_indices.cpu().tolist()
@@ -149,15 +145,21 @@ class ThinkingBudgetStateHolder:
                 state["spec_token_ids"] = []
             state["in_spec_mode"] = self.in_spec_mode
             state["force_index"] = []
-            out_tok_ids = state["output_tok_ids"]
-            spec_n = len(state["spec_token_ids"])
-            print("output_tok_ids in length: ", state["output_tok_ids"])
             if len(state["output_tok_ids"]) > 0:
-                if len(state["output_tok_ids"]) > len(state["spec_token_ids"]) and len(state["spec_token_ids"]) > 0:
+                if len(state["output_tok_ids"]) >= (len(state["spec_token_ids"])):
                     state["output_tok_ids"] = state["output_tok_ids"][:-len(state["spec_token_ids"])]
-            print("output_tok_ids in length after: ", state["output_tok_ids"])
             self._update_think_state(state)
 
+    def apply_to_logits(
+        self,
+        logits: torch.Tensor,
+        predict_bonus_token: bool,
+        spec_token_ids: list[list[int]] | None,
+    ) -> torch.Tensor:
+        """Mask and bump logits for forced end-of-thinking tokens (uses current ``_state``)."""
+        if not self.is_enabled or not self._state:
+            return logits
+        spec_lists = spec_token_ids or []
         return self._apply_forcing_to_logits(logits, predict_bonus_token, spec_lists)
 
     @staticmethod
@@ -198,6 +200,8 @@ class ThinkingBudgetStateHolder:
                 start_thinking = len(prompt_tok_ids) - think_count - 1
                 countdown -= think_count
                 continue_thinking = True
+                print("this is count down: ", countdown)
+                print("THis is think count: ", think_count)
             else:
                 think_count = 0
 
@@ -229,13 +233,12 @@ class ThinkingBudgetStateHolder:
             state["force_index"] = []
             return
 
-
         if state["start_thinking"] == -1:
             start_thinking = self._find_last_sequence_index(
                 state.get("output_tok_ids", []), self.think_start_token_ids
             )
             state["start_thinking"] = start_thinking
-            print(f"start_thinking: {state['start_thinking']}")
+
 
         if state["end_thinking"] == -1:
             end_thinking = self._find_last_sequence_index(
@@ -250,9 +253,6 @@ class ThinkingBudgetStateHolder:
             sampled_tokens_from_previous_step = len(
                 state.get("output_tok_ids", [])
             ) - state.get("prev_output_length", 0)
-            print("output_tok_ids: ", state.get("output_tok_ids", []))
-            print("prev_output_length: ", state.get("prev_output_length", 0))
-            print(f"sampled_tokens_from_previous_step: {sampled_tokens_from_previous_step}")
         else:
             if state["prev_output_length"] == 0:
                 sampled_tokens_from_previous_step = len(
