@@ -2,6 +2,7 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
 from __future__ import annotations
+
 from dataclasses import dataclass
 
 import torch

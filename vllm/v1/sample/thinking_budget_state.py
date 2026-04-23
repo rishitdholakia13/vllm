@@ -21,13 +21,16 @@ def maybe_create_thinking_budget_state_holder(
     is_pin_memory: bool,
 ) -> "ThinkingBudgetStateHolder | None":
     rc = vllm_config.reasoning_config
-    if rc is None or not rc.enabled:
+    if rc is None:
         return None
     return ThinkingBudgetStateHolder(vllm_config, device, is_pin_memory)
 
 
 class ThinkingBudgetStateHolder:
     """Tracks thinking sections and forces end tokens when budget is exceeded."""
+
+    think_start_token_ids: list[int]
+    think_end_token_ids: list[int]
 
     def __init__(
         self, vllm_config: "VllmConfig", device: torch.device, is_pin_memory: bool
@@ -41,7 +44,8 @@ class ThinkingBudgetStateHolder:
         else:
             self.num_spec_tokens = 0
 
-        self.is_enabled = reasoning_config is not None and reasoning_config.enabled
+        # No separate enable flag: ``reasoning_config`` on VllmConfig is the switch.
+        self.is_enabled = reasoning_config is not None
 
         if reasoning_config is None:
             self.think_start_token_ids = []
@@ -75,7 +79,7 @@ class ThinkingBudgetStateHolder:
             )
 
     def has_tracked_requests(self) -> bool:
-        """True when ``sync_batch`` has state for at least one thinking_token_budget row.
+        """True when ``sync_batch`` has state for a ``thinking_token_budget`` row.
 
         Used to decide whether sampling needs output-token rows and spec combining;
         distinct from merely having a holder instance (reasoning may be on with no
@@ -103,10 +107,10 @@ class ThinkingBudgetStateHolder:
 
         for i1, i2, direction in batch_update.moved:
             if direction == MoveDirectionality.SWAP:
-                state1 = self._state.get(i1, {})
-                state2 = self._state.get(i2, {})
+                state1 = self._state.get(i1)
+                state2 = self._state.get(i2)
                 if state1 is not None:
-                        self._state[i2] = state1
+                    self._state[i2] = state1
                 if state2 is not None:
                     self._state[i1] = state2
             else:
@@ -120,7 +124,7 @@ class ThinkingBudgetStateHolder:
         spec_token_ids: list[list[int]] | None,
         repeat_indices: torch.Tensor | None = None,
     ) -> None:
-        """Refresh per-request output/spec from sampling rows and recompute think state."""
+        """Refresh output/spec from sampling rows and recompute think state."""
         if not self.is_enabled or not self._state:
             return
 
@@ -149,8 +153,11 @@ class ThinkingBudgetStateHolder:
             state["in_spec_mode"] = self.in_spec_mode
             state["force_index"] = []
             if len(state["output_tok_ids"]) > 0:
-                if len(state["output_tok_ids"]) >= (len(state["spec_token_ids"])):
-                    state["output_tok_ids"] = state["output_tok_ids"][:-len(state["spec_token_ids"])]
+                spec_len = len(state["spec_token_ids"])
+                # Only strip draft suffix when there are spec tokens; ``[:-0]`` would
+                # clear the whole list (Python treats stop index 0 as "up to empty").
+                if spec_len > 0 and len(state["output_tok_ids"]) >= spec_len:
+                    state["output_tok_ids"] = state["output_tok_ids"][:-spec_len]
             self._update_think_state(state)
 
     def apply_to_logits(
@@ -159,7 +166,7 @@ class ThinkingBudgetStateHolder:
         predict_bonus_token: bool,
         spec_token_ids: list[list[int]] | None,
     ) -> torch.Tensor:
-        """Mask and bump logits for forced end-of-thinking tokens (uses current ``_state``)."""
+        """Mask and bump logits for forced end-of-thinking tokens."""
         if not self.is_enabled or not self._state:
             return logits
         spec_lists = spec_token_ids or []
@@ -203,8 +210,6 @@ class ThinkingBudgetStateHolder:
                 start_thinking = len(prompt_tok_ids) - think_count - 1
                 countdown -= think_count
                 continue_thinking = True
-                print("this is count down: ", countdown)
-                print("THis is think count: ", think_count)
             else:
                 think_count = 0
 
@@ -241,7 +246,6 @@ class ThinkingBudgetStateHolder:
                 state.get("output_tok_ids", []), self.think_start_token_ids
             )
             state["start_thinking"] = start_thinking
-
 
         if state["end_thinking"] == -1:
             end_thinking = self._find_last_sequence_index(

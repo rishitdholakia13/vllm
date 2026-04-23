@@ -22,8 +22,8 @@ from vllm.v1.sample.logits_processor import (
     MoveDirectionality,
 )
 from vllm.v1.sample.metadata import SamplingMetadata
-from vllm.v1.utils import copy_slice
 from vllm.v1.sample.thinking_budget_state import ThinkingBudgetStateHolder
+from vllm.v1.utils import copy_slice
 from vllm.v1.worker.block_table import MultiGroupBlockTable
 
 

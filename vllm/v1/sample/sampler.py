@@ -359,9 +359,7 @@ class Sampler(nn.Module):
             bool(bad_words_token_ids) or not sampling_metadata.no_penalties
         )
         holder = sampling_metadata.thinking_budget_state_holder
-        needs_thinking_combine = (
-            holder is not None and holder.has_tracked_requests()
-        )
+        needs_thinking_combine = holder is not None and holder.has_tracked_requests()
 
         output_token_ids = sampling_metadata.output_token_ids
         if predict_bonus_token and (
