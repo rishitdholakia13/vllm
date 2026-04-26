@@ -12,18 +12,21 @@ from vllm.v1.sample.logits_processor.interface import (
 )
 
 if TYPE_CHECKING:
-    from vllm.config import VllmConfig
+    from vllm.config.reasoning import ReasoningConfig
 
 
 def maybe_create_thinking_budget_state_holder(
-    vllm_config: "VllmConfig",
+    reasoning_config: "ReasoningConfig | None",
+    max_num_seqs: int,
+    num_spec_tokens: int,
     device: torch.device,
     is_pin_memory: bool,
 ) -> "ThinkingBudgetStateHolder | None":
-    rc = vllm_config.reasoning_config
-    if rc is None:
+    if reasoning_config is None:
         return None
-    return ThinkingBudgetStateHolder(vllm_config, device, is_pin_memory)
+    return ThinkingBudgetStateHolder(
+        reasoning_config, max_num_seqs, num_spec_tokens, device, is_pin_memory
+    )
 
 
 class ThinkingBudgetStateHolder:
@@ -33,18 +36,19 @@ class ThinkingBudgetStateHolder:
     think_end_token_ids: list[int]
 
     def __init__(
-        self, vllm_config: "VllmConfig", device: torch.device, is_pin_memory: bool
+        self,
+        reasoning_config: "ReasoningConfig | None",
+        max_num_seqs: int,
+        num_spec_tokens: int,
+        device: torch.device,
+        is_pin_memory: bool,
     ):
         _ = is_pin_memory  # API parity with logits processors
-        reasoning_config = vllm_config.reasoning_config
-        max_num_reqs = vllm_config.scheduler_config.max_num_seqs
-        self.in_spec_mode = bool(vllm_config.speculative_config)
-        if vllm_config.speculative_config:
-            self.num_spec_tokens = vllm_config.speculative_config.num_speculative_tokens
-        else:
-            self.num_spec_tokens = 0
+        max_num_reqs = max_num_seqs
+        self.in_spec_mode = num_spec_tokens > 0
+        self.num_spec_tokens = num_spec_tokens
 
-        # No separate enable flag: ``reasoning_config`` on VllmConfig is the switch.
+        # No separate enable flag: a non-``None`` ``reasoning_config`` is the switch.
         self.is_enabled = reasoning_config is not None
 
         if reasoning_config is None:

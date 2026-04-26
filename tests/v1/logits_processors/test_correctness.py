@@ -3,7 +3,6 @@
 
 import random
 from collections.abc import Callable
-from types import SimpleNamespace
 from typing import NamedTuple, TypeAlias
 
 import numpy as np
@@ -136,8 +135,17 @@ def _generate_fake_sampling_metadata(
         is_pin_memory=PIN_MEMORY_AVAILABLE,
         is_pooling_model=False,
     )
+    num_spec = (
+        vllm_config.speculative_config.num_speculative_tokens
+        if vllm_config.speculative_config
+        else 0
+    )
     thinking_holder = maybe_create_thinking_budget_state_holder(
-        vllm_config, device, PIN_MEMORY_AVAILABLE
+        vllm_config.reasoning_config,
+        vllm_config.scheduler_config.max_num_seqs,
+        num_spec,
+        device,
+        PIN_MEMORY_AVAILABLE,
     )
     fake_sampling_metadata = SamplingMetadata(
         temperature=torch.full((batch_size,), 0.0),
@@ -867,7 +875,13 @@ def test_maybe_create_thinking_budget_holder_without_reasoning():
     cfg = VllmConfig()
     assert cfg.reasoning_config is None
     assert (
-        maybe_create_thinking_budget_state_holder(cfg, torch.device("cpu"), False)
+        maybe_create_thinking_budget_state_holder(
+            None,
+            cfg.scheduler_config.max_num_seqs,
+            0,
+            torch.device("cpu"),
+            False,
+        )
         is None
     )
 
@@ -875,7 +889,13 @@ def test_maybe_create_thinking_budget_holder_without_reasoning():
 def test_thinking_budget_holder_has_tracked_after_sync_add():
     vc = VllmConfig()
     vc.reasoning_config = MockReasoningConfig()
-    h = ThinkingBudgetStateHolder(vc, torch.device("cpu"), False)
+    h = ThinkingBudgetStateHolder(
+        vc.reasoning_config,
+        vc.scheduler_config.max_num_seqs,
+        0,
+        torch.device("cpu"),
+        False,
+    )
     assert not h.has_tracked_requests()
     h.sync_batch(
         BatchUpdate(
@@ -899,7 +919,13 @@ def test_thinking_budget_holder_has_tracked_after_sync_add():
 def test_thinking_budget_holder_sync_remove_clears_state():
     vc = VllmConfig()
     vc.reasoning_config = MockReasoningConfig()
-    h = ThinkingBudgetStateHolder(vc, torch.device("cpu"), False)
+    h = ThinkingBudgetStateHolder(
+        vc.reasoning_config,
+        vc.scheduler_config.max_num_seqs,
+        0,
+        torch.device("cpu"),
+        False,
+    )
     h.sync_batch(
         BatchUpdate(
             batch_size=1,
@@ -923,7 +949,13 @@ def test_thinking_budget_holder_sync_remove_clears_state():
 def test_thinking_budget_holder_sync_add_without_budget_drops_row():
     vc = VllmConfig()
     vc.reasoning_config = MockReasoningConfig()
-    h = ThinkingBudgetStateHolder(vc, torch.device("cpu"), False)
+    h = ThinkingBudgetStateHolder(
+        vc.reasoning_config,
+        vc.scheduler_config.max_num_seqs,
+        0,
+        torch.device("cpu"),
+        False,
+    )
     h.sync_batch(
         BatchUpdate(
             batch_size=1,
@@ -938,7 +970,13 @@ def test_thinking_budget_holder_sync_add_without_budget_drops_row():
 def test_thinking_budget_holder_swap_exchanges_state():
     vc = VllmConfig()
     vc.reasoning_config = MockReasoningConfig()
-    h = ThinkingBudgetStateHolder(vc, torch.device("cpu"), False)
+    h = ThinkingBudgetStateHolder(
+        vc.reasoning_config,
+        vc.scheduler_config.max_num_seqs,
+        0,
+        torch.device("cpu"),
+        False,
+    )
     h.sync_batch(
         BatchUpdate(
             batch_size=2,
@@ -976,7 +1014,13 @@ def test_thinking_budget_holder_swap_exchanges_state():
 def test_thinking_budget_holder_unidirectional_move():
     vc = VllmConfig()
     vc.reasoning_config = MockReasoningConfig()
-    h = ThinkingBudgetStateHolder(vc, torch.device("cpu"), False)
+    h = ThinkingBudgetStateHolder(
+        vc.reasoning_config,
+        vc.scheduler_config.max_num_seqs,
+        0,
+        torch.device("cpu"),
+        False,
+    )
     h.sync_batch(
         BatchUpdate(
             batch_size=2,
@@ -1008,7 +1052,13 @@ def test_thinking_budget_holder_unidirectional_move():
 def test_thinking_budget_holder_update_state_repeat_indices_last_row_wins():
     vc = VllmConfig()
     vc.reasoning_config = MockReasoningConfig()
-    h = ThinkingBudgetStateHolder(vc, torch.device("cpu"), False)
+    h = ThinkingBudgetStateHolder(
+        vc.reasoning_config,
+        vc.scheduler_config.max_num_seqs,
+        0,
+        torch.device("cpu"),
+        False,
+    )
     h.sync_batch(
         BatchUpdate(
             batch_size=1,
@@ -1034,13 +1084,13 @@ def test_thinking_budget_holder_update_state_repeat_indices_last_row_wins():
 
 
 def test_thinking_budget_holder_spec_mode_tensor_layout():
-    # Avoid assigning a non-SpeculativeConfig onto VllmConfig; holder only reads attrs.
-    vc = SimpleNamespace(
-        reasoning_config=MockReasoningConfig(),
-        speculative_config=SimpleNamespace(num_speculative_tokens=2),
-        scheduler_config=SimpleNamespace(max_num_seqs=8),
+    h = ThinkingBudgetStateHolder(
+        MockReasoningConfig(),
+        8,
+        2,
+        torch.device("cpu"),
+        False,
     )
-    h = ThinkingBudgetStateHolder(vc, torch.device("cpu"), False)  # type: ignore[arg-type]
     assert h.in_spec_mode
     assert h.mask.shape[0] == 8 * (2 + 1)
 
@@ -1048,7 +1098,13 @@ def test_thinking_budget_holder_spec_mode_tensor_layout():
 def test_thinking_budget_holder_empty_end_tokens_disables_row():
     vc = VllmConfig()
     vc.reasoning_config = MockReasoningNoEndTokens()
-    h = ThinkingBudgetStateHolder(vc, torch.device("cpu"), False)
+    h = ThinkingBudgetStateHolder(
+        vc.reasoning_config,
+        vc.scheduler_config.max_num_seqs,
+        0,
+        torch.device("cpu"),
+        False,
+    )
     h.sync_batch(
         BatchUpdate(
             batch_size=1,

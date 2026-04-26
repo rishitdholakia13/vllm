@@ -8,6 +8,7 @@ from typing import cast
 import numpy as np
 import torch
 
+from vllm.config.reasoning import ReasoningConfig
 from vllm.lora.request import LoRARequest
 from vllm.multimodal.inputs import MultiModalFeatureSpec
 from vllm.pooling_params import PoolingParams
@@ -22,7 +23,9 @@ from vllm.v1.sample.logits_processor import (
     MoveDirectionality,
 )
 from vllm.v1.sample.metadata import SamplingMetadata
-from vllm.v1.sample.thinking_budget_state import ThinkingBudgetStateHolder
+from vllm.v1.sample.thinking_budget_state import (
+    maybe_create_thinking_budget_state_holder,
+)
 from vllm.v1.utils import copy_slice
 from vllm.v1.worker.block_table import MultiGroupBlockTable
 
@@ -93,15 +96,21 @@ class InputBatch:
         max_num_blocks_per_req: list[int] | None = None,
         logitsprocs: LogitsProcessors | None = None,
         logitsprocs_need_output_token_ids: bool = False,
-        is_spec_decode: bool = False,
+        num_spec_tokens: int = 0,
         is_pooling_model: bool = False,
         cp_kv_cache_interleave_size: int = 1,
-        thinking_budget_state_holder: ThinkingBudgetStateHolder | None = None,
+        reasoning_config: ReasoningConfig | None = None,
     ):
-        self.thinking_budget_state_holder = thinking_budget_state_holder
+        self.thinking_budget_state_holder = maybe_create_thinking_budget_state_holder(
+            reasoning_config,
+            max_num_reqs,
+            num_spec_tokens,
+            device,
+            pin_memory,
+        )
         self.thinking_token_budget_reqs: set[str] = set()
         self.is_pooling_model = is_pooling_model
-        self.is_spec_decode = is_spec_decode
+        self.num_spec_tokens = num_spec_tokens
         self.max_num_reqs = max_num_reqs
         self.max_model_len = max_model_len
         self.max_num_batched_tokens = max_num_batched_tokens

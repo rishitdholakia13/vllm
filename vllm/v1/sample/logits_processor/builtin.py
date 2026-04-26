@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 from collections.abc import Callable, Sequence
-from typing import TYPE_CHECKING, Any, TypeVar
+from typing import TYPE_CHECKING, TypeVar
 
 import numpy as np
 import torch
@@ -289,6 +289,7 @@ class MinTokensLogitsProcessor(LogitsProcessor):
             logits.index_put_(logits_slice, self.neg_inf_tensor)
 
         return logits
+
 
 def process_dict_updates(
     req_entries: dict[int, T],

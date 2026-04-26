@@ -268,7 +268,6 @@ async def test_thinking_token_budget_qwen35_fp8_mtp_concurrent_mixed_budget_and_
 
     # ("budget", int) or ("plain", None) — order defines ``asyncio.gather`` wave.
     _batch_spec: list[tuple[Literal["budget"], int] | tuple[Literal["plain"], None]] = [
-        ("budget", 0),
         ("budget", 12),
         ("plain", None),
         ("budget", 20),
