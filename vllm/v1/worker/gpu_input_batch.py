@@ -110,7 +110,6 @@ class InputBatch:
         )
         self.thinking_token_budget_reqs: set[str] = set()
         self.is_pooling_model = is_pooling_model
-        self.num_spec_tokens = num_spec_tokens
         self.max_num_reqs = max_num_reqs
         self.max_model_len = max_model_len
         self.max_num_batched_tokens = max_num_batched_tokens
