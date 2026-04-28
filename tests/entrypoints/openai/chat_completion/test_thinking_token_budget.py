@@ -1,7 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
-"""E2E tests for thinking_token_budget with reasoning models."""
+"""E2E tests for ``thinking_token_budget`` with reasoning models.
+
+Covers Qwen3-0.6B and Qwen3.5 FP8 + MTP.
+"""
 
 import asyncio
 import json
@@ -20,10 +23,6 @@ QWEN35_FP8_MTP_MODEL = "Qwen/Qwen3.5-35B-A3B-FP8"
 MESSAGES = [{"role": "user", "content": "What is 1+1? Be concise."}]
 THINK_BUDGET = 5
 
-# Budgets exercised against Qwen3.5 FP8 + MTP (TP=2); see
-# ``_count_reasoning_decode_token_ids_between_markers`` for the metric.
-QWEN35_MTP_THINKING_TOKEN_BUDGETS = [8, 24, 40]
-
 REASONING_START_STR = "<think>"
 REASONING_END_STR = "</think>"
 
@@ -33,15 +32,7 @@ def _count_reasoning_decode_token_ids_between_markers(
     reasoning_start_ids: list[int],
     reasoning_end_ids: list[int],
 ) -> int | None:
-    """Decode-token count inside the thinking span (after last start, before first end).
-
-    ``thinking_token_budget`` is enforced in **decode token id** space, not in
-    OpenAI streaming chunks: a single ``delta.reasoning`` string may aggregate
-    many tokens (especially with speculative decoding). This matches the
-    substring-between-markers idea used in ``test_raw_thinking_budget.py``, but
-    counts **token ids** between the same marker tokenizations as
-    ``--reasoning-config``.
-    """
+    """Count decode tokens in the thinking span (after last start, before first end)."""
 
     if not reasoning_start_ids or not reasoning_end_ids:
         raise ValueError("reasoning marker token id lists must be non-empty")
@@ -64,7 +55,6 @@ def _count_reasoning_decode_token_ids_between_markers(
     for j in range(pos_after_start, len(full_token_ids) - end_n + 1):
         if full_token_ids[j : j + end_n] == reasoning_end_ids:
             return j - pos_after_start
-    # No closing marker in the sequence (truncation): everything after start counts.
     return len(full_token_ids) - pos_after_start
 
 
@@ -127,15 +117,22 @@ def server_qwen35_fp8_mtp_tp2():
         "--reasoning-config",
         json.dumps(
             {
-                "reasoning_start_str": "<think>",
-                "reasoning_end_str": "</think>",
+                "reasoning_start_str": REASONING_START_STR,
+                "reasoning_end_str": REASONING_END_STR,
             }
         ),
     ]
+    # With 4+ GPUs, run TP=2 on physical devices 2,3 so module-scoped 0.6B servers
+    # on 0,1 do not exhaust memory on the same devices as this worker.
+    env_dict = None
+    if current_platform.device_count() >= 4:
+        env_dict = {"CUDA_VISIBLE_DEVICES": "2,3"}
+
     with RemoteOpenAIServer(
         QWEN35_FP8_MTP_MODEL,
         args,
         max_wait_seconds=3000,
+        env_dict=env_dict,
     ) as remote_server:
         yield remote_server
 
@@ -182,8 +179,9 @@ async def test_thinking_token_budget_limits_reasoning(client: openai.AsyncOpenAI
     """Test that thinking_token_budget limits the number of reasoning tokens.
 
     Counts non-empty streaming ``delta.reasoning`` chunks (coarse proxy; each
-    chunk may represent multiple decode tokens — see Qwen3.5 MTP test for an
-    id-based check).
+    chunk may represent multiple decode tokens — see
+    ``_count_reasoning_decode_token_ids_between_markers`` and the Qwen3.5 MTP
+    test for id-based checks).
     """
 
     reasoning_token_count = 0
@@ -208,66 +206,18 @@ async def test_thinking_token_budget_limits_reasoning(client: openai.AsyncOpenAI
 @pytest.mark.asyncio
 @multi_gpu_only(num_gpus=2)
 @requires_fp8
-@pytest.mark.parametrize("thinking_token_budget", QWEN35_MTP_THINKING_TOKEN_BUDGETS)
-async def test_thinking_token_budget_qwen35_fp8_mtp_stream_matches_budget(
-    server_qwen35_fp8_mtp_tp2,
-    thinking_token_budget: int,
-):
-    """``thinking_token_budget`` on Qwen3.5 FP8 + MTP (TP=2) matches decode token count.
-
-    Streaming ``delta.reasoning`` chunks are **not** one token per chunk; with MTP
-    the server may batch several decode tokens per SSE event. This test uses
-    ``return_token_ids`` (same as ``tests/entrypoints/openai/test_return_token_ids.py``)
-    and counts token ids between the configured reasoning markers on
-    ``prompt_token_ids + completion_token_ids``.
-    """
-
-    tokenizer = get_tokenizer(tokenizer_name=QWEN35_FP8_MTP_MODEL)
-    start_ids = list(tokenizer.encode(REASONING_START_STR, add_special_tokens=False))
-    end_ids = list(tokenizer.encode(REASONING_END_STR, add_special_tokens=False))
-
-    async with server_qwen35_fp8_mtp_tp2.get_async_client() as client:
-        response = await client.chat.completions.create(
-            model=QWEN35_FP8_MTP_MODEL,
-            messages=MESSAGES,
-            max_tokens=256,
-            stream=False,
-            extra_body={
-                "thinking_token_budget": thinking_token_budget,
-                "return_token_ids": True,
-            },
-        )
-
-    assert response.prompt_token_ids is not None
-    assert response.choices[0].token_ids is not None
-    full_ids = list(response.prompt_token_ids) + list(response.choices[0].token_ids)
-
-    n_reason = _count_reasoning_decode_token_ids_between_markers(
-        full_ids, start_ids, end_ids
-    )
-    assert n_reason is not None, "expected reasoning start markers in prompt+output ids"
-    assert n_reason == thinking_token_budget, (
-        f"reasoning decode token ids ({n_reason}) != "
-        f"thinking_token_budget ({thinking_token_budget})"
-    )
-
-
-@pytest.mark.asyncio
-@multi_gpu_only(num_gpus=2)
-@requires_fp8
 async def test_thinking_token_budget_qwen35_fp8_mtp_concurrent_mixed_budget_and_plain(
     server_qwen35_fp8_mtp_tp2,
 ):
     """Concurrent chat requests: some with ``thinking_token_budget``, some without.
 
     Exercises the scheduler / input processor under a mixed batch on the same
-    Qwen3.5 FP8 + MTP (TP=2) server. Budgeted calls are checked with the same
-    decode-token metric as
-    ``test_thinking_token_budget_qwen35_fp8_mtp_stream_matches_budget``.
+    Qwen3.5 FP8 + MTP (TP=2) server. Budgeted calls are checked with
+    ``_count_reasoning_decode_token_ids_between_markers`` on full token ids.
     """
 
-    # ("budget", int) or ("plain", None) — order defines ``asyncio.gather`` wave.
     _batch_spec: list[tuple[Literal["budget"], int] | tuple[Literal["plain"], None]] = [
+        ("budget", 1),
         ("budget", 12),
         ("plain", None),
         ("budget", 20),
